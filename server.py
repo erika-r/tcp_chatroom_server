@@ -1,65 +1,104 @@
-import socket
+#!/usr/bin/env python3
+
 import threading
-import sys
+import socket
+import argparse
+import os
 
-if len(sys.argv) > 1:
-    host = sys.argv[1]
-    port = int(sys.argv[2])
-else:
-    host = "127.0.0.1"
-    port= 60000
+#manages server connections
+class Server(threading.Thread):
+    def __init__(self, host, port):
+        super().__init__()
+        self.connections = []       #list of ServerSocket objects representing the active connections.
+        self.host = host            #IP address of listening socket
+        self.port = port            # port number of listening socket
+    
+    def run(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) #create listening socket
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  #SO_REUSEADDR used to allow binding to a previously-used socket address
+        sock.bind((self.host, self.port))
 
-# Starting Server
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind((host, port))
-server.listen()
+        sock.listen(1)
+        print('Listening at', sock.getsockname())
 
-# Lists For Clients and Their Nicknames
-clients = []
-nicknames = []#
+        while True:
 
-# Sending Messages To All Connected Clients
-def broadcast(message):
-    for client in clients:
-        client.send(message)
+            # Accept new connection
+            sc, sockname = sock.accept()
+            print('Accepted a new connection from {} to {}'.format(sc.getpeername(), sc.getsockname()))
 
-# Handling Messages From Clients
-def handle(client):
+            # Create new thread
+            server_socket = ServerSocket(sc, sockname, self)
+            
+            # Start new thread
+            server_socket.start()
+
+            # Add thread to active connections
+            self.connections.append(server_socket)      #ServerSocket objects are stored in self.connections
+            print('Ready to receive messages from', sc.getpeername())
+
+    #sends message to all connected clients except source/sender
+    def broadcast(self, message, source):
+        for connection in self.connections:
+
+            # Send to all connected clients except the source client
+            if connection.sockname != source:
+                connection.send(message)
+    
+    #removes client connection 
+    def remove_connection(self, connection):
+        self.connections.remove(connection)
+
+#supports client communication
+class ServerSocket(threading.Thread):
+    def __init__(self, sc, sockname, server):
+        super().__init__()
+        self.sc = sc        #connected socket object
+        self.sockname = sockname        #client socket address
+        self.server = server        #parent thread
+    
+    #either broadcasts message from client to other clients
+    #or closes and removes the socket from the parent thread if the client has left
+    def run(self):
+        while True:
+            message = self.sc.recv(1024).decode('ascii')
+            if message:
+                print('{} says {!r}'.format(self.sockname, message))
+                self.server.broadcast(message, self.sockname)
+            else:
+                # Client has closed the socket, exit the thread
+                print('{} has closed the connection'.format(self.sockname))
+                self.sc.close()
+                server.remove_connection(self)
+                return
+    
+    #sends message to server
+    def send(self, message):
+        self.sc.sendall(message.encode('ascii'))
+
+#allows the administrator to shut down the server
+#type "quit" to shut down server, close all active connections and exit the gui
+def exit(server):
     while True:
-        try:
-            # Broadcasting Messages
-            message = client.recv(1024)
-            broadcast(message)
-        except:
-            # Removing And Closing Clients
-            index = clients.index(client)
-            clients.remove(client)
-            client.close()
-            nickname = nicknames[index]
-            broadcast('{} left!'.format(nickname).encode('ascii'))
-            nicknames.remove(nickname)
-            break
+        ipt = input('')
+        if ipt == 'quit':
+            print('Closing all connections...')
+            for connection in server.connections:
+                connection.sc.close()
+            print('Shutting down the server...')
+            os._exit(0)
 
-# Receiving / Listening Function
-def receive():
-    while True:
-        # Accept Connection
-        client, address = server.accept()
-        print("Connected with {}".format(str(address)))
 
-        # Request And Store Nickname
-        client.send('NICK'.encode('ascii'))
-        nickname = client.recv(1024).decode('ascii')
-        nicknames.append(nickname)
-        clients.append(client)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Chatroom Server')
+    parser.add_argument('host', help='Interface the server listens at')
+    parser.add_argument('-p', metavar='PORT', type=int, default=1060,
+                        help='TCP port (default 1060)')
+    args = parser.parse_args()
 
-        # Print And Broadcast Nickname
-        print("Nickname is {}".format(nickname))
-        broadcast("{} joined!".format(nickname).encode('ascii'))
-        client.send('Connected to server!'.encode('ascii'))
+    # Create and start server thread
+    server = Server(args.host, args.p)
+    server.start()
 
-        # Start Handling Thread For Client
-        thread = threading.Thread(target=handle, args=(client,))
-        thread.start()
-
-receive()
+    exit = threading.Thread(target = exit, args = (server,))
+    exit.start()
