@@ -1,104 +1,51 @@
-#!/usr/bin/env python3
 
-import threading
-import socket
+import select, socket, sys
+from handler import Lobby, Room, Player
+import handler
 import argparse
-import os
+import threading
 
-#manages server connections
-class Server(threading.Thread):
-    def __init__(self, host, port):
-        super().__init__()
-        self.connections = []       #list of ServerSocket objects representing the active connections.
-        self.host = host            #IP address of listening socket
-        self.port = port            # port number of listening socket
-    
-    def run(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) #create listening socket
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  #SO_REUSEADDR used to allow binding to a previously-used socket address
-        sock.bind((self.host, self.port))
+READ_BUFFER = 4096
 
-        sock.listen(1)
-        print('Listening at', sock.getsockname())
-
-        while True:
-
-            # Accept new connection
-            sc, sockname = sock.accept()
-            print('Accepted a new connection from {} to {}'.format(sc.getpeername(), sc.getsockname()))
-
-            # Create new thread
-            server_socket = ServerSocket(sc, sockname, self)
-            
-            # Start new thread
-            server_socket.start()
-
-            # Add thread to active connections
-            self.connections.append(server_socket)      #ServerSocket objects are stored in self.connections
-            print('Ready to receive messages from', sc.getpeername())
-
-    #sends message to all connected clients except source/sender
-    def broadcast(self, message, source):
-        for connection in self.connections:
-
-            # Send to all connected clients except the source client
-            if connection.sockname != source:
-                connection.send(message)
-    
-    #removes client connection 
-    def remove_connection(self, connection):
-        self.connections.remove(connection)
-
-#supports client communication
-class ServerSocket(threading.Thread):
-    def __init__(self, sc, sockname, server):
-        super().__init__()
-        self.sc = sc        #connected socket object
-        self.sockname = sockname        #client socket address
-        self.server = server        #parent thread
-    
-    #either broadcasts message from client to other clients
-    #or closes and removes the socket from the parent thread if the client has left
-    def run(self):
-        while True:
-            message = self.sc.recv(1024).decode('ascii')
-            if message:
-                print('{} says {!r}'.format(self.sockname, message))
-                self.server.broadcast(message, self.sockname)
-            else:
-                # Client has closed the socket, exit the thread
-                print('{} has closed the connection'.format(self.sockname))
-                self.sc.close()
-                server.remove_connection(self)
-                return
-    
-    #sends message to server
-    def send(self, message):
-        self.sc.sendall(message.encode('ascii'))
-
-#allows the administrator to shut down the server
-#type "quit" to shut down server, close all active connections and exit the gui
-def exit(server):
+def broadcast(listen_sock,lobby,connection_list):
     while True:
-        ipt = input('')
-        if ipt == 'quit':
-            print('Closing all connections...')
-            for connection in server.connections:
-                connection.sc.close()
-            print('Shutting down the server...')
-            os._exit(0)
+        # uses Player.fileno()
+        read_players, write_players, error_sockets = select.select(connection_list, [], [])
+        
+        for player in read_players:
+            if player is listen_sock: # new connection, player is a socket
+                new_socket, add = player.accept()
+                new_player = Player(new_socket)
+                connection_list.append(new_player)
+                lobby.welcome(new_player)
 
+            else: # new message
+                msg = player.socket.recv(READ_BUFFER)
+                if msg:
+                    msg = msg.decode().lower()
+                    lobby.handle_msg(player, msg)
+                else:
+                    player.socket.close()
+                    connection_list.remove(player)
+        
+        for sock in error_sockets: # close error sockets
+            sock.close()
+            connection_list.remove(sock)
+        
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Chatroom Server')
-    parser.add_argument('host', help='Interface the server listens at')
-    parser.add_argument('-p', metavar='PORT', type=int, default=1060,
-                        help='TCP port (default 1060)')
-    args = parser.parse_args()
+#read input from command line
+parser = argparse.ArgumentParser(description='Chatroom Server')
+parser.add_argument('host', default="0.0.0.0",help='Interface the server listens at')
+parser.add_argument('-p', metavar='PORT', type=int, default=8000,
+                    help='TCP port (default 1060)')
+args = parser.parse_args()
 
-    # Create and start server thread
-    server = Server(args.host, args.p)
-    server.start()
+listen_sock = handler.create_socket((args.host,args.p))
 
-    exit = threading.Thread(target = exit, args = (server,))
-    exit.start()
+lobby = Lobby()
+connection_list = []
+connection_list.append(listen_sock)
+
+broadcast(listen_sock,lobby,connection_list)
+# threading.Thread(target=broadcast,args=[listen_sock,lobby,connection_list]).start()
+
