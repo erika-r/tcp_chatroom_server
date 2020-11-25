@@ -1,46 +1,41 @@
-import select, socket, sys
+import select,socket,sys,argparse
 import handler     #string to quit
-import argparse
 
-READ_BUFFER = 4096
-
-
+#read command line arguments
 parser = argparse.ArgumentParser(description="Client Connection")
 parser.add_argument("host", default="0.0.0.0",help="Interface the server listens at")
 parser.add_argument("-p", metavar="PORT", type=int, default=8000,
                     help="TCP port (default 8000)")
 args = parser.parse_args()
 
+#create connection to server
 server_connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_connection.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server_connection.connect((args.host, args.p))   #ip address, port
-
-print("Connected to server\n")
-
 socket_list = [sys.stdin, server_connection]
 
-msg_prefix = ""
+msg_start = ""
 while True:
     read_sockets, write_sockets, error_sockets = select.select(socket_list, [], [])
-    for s in read_sockets:
-        if s is server_connection: # incoming message 
-            msg = s.recv(READ_BUFFER)       #if no message
+    for sock in read_sockets:
+        if sock is server_connection: # incoming message 
+            msg = sock.recv(4096)       #if no message received
             if not msg:
+                #shut down for client
                 print("Server down!")
                 sys.exit(2)
             else:
                 if msg == handler.QUIT.encode():
-                    sys.stdout.write("Bye!\n")
-                    quit()
-                    # sys.exit(2)
+                    sys.stdout.write("See you again!\n")
+                    quit()      #quit only for the player
                 else:
                     sys.stdout.write(msg.decode())
-                    if "Please tell us your name" in msg.decode():
-                        msg_prefix = "name: " # identifier for name
+                    if "What's your name?" in msg.decode():
+                        msg_start = "name: " # identifier for name
                     else:
-                        msg_prefix = ""
+                        msg_start = ""
                     print(">", end=" ", flush = True)   #move to next line
 
         else:
-            msg = msg_prefix + sys.stdin.readline()
-            server_connection.sendall(msg.encode())
+            msg = msg_start + sys.stdin.readline()
+            server_connection.sendall(msg.encode())     #pass to server to pass to lobby
