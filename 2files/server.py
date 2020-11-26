@@ -2,12 +2,13 @@
 import select,socket,argparse,threading,os
 from client import Client
 
-#all commands 
+#all commands and how to use them
+commands = ["!rooms","!online","!join","!instructions","!leave"]
 instructions = "Instructions:\n"\
     + "!rooms to list all rooms\n"\
     + "!online to show online users\n" \
     + "!join [room_name] to join/create/switch to a room\n" \
-    + "!instructions.encode() to show instructions.encode()\n" \
+    + "!instructions to show instructions\n" \
     + "!leave to leave current room and/or to exit the server\n"
 
 class Server:
@@ -24,13 +25,11 @@ class Server:
     def client_names(self):
         return [client.name for client in client_connections if client != self.listening_socket]
 
-    """ broadcast accepts new clients,
-    passes incoming messages to be handled,
+    """ broadcast accepts new clients,handles incoming messages, 
     and removes clients who have left the server"""
     def broadcast(self):
         while True:
-            #X and Y are not needed
-            read_clients, X, Y = select.select(self.client_connections, [], [])     #uses client fileno
+            read_clients, X, Y = select.select(self.client_connections, [], [])     #uses client fileno,X and Y are not needed
             
             """try and except are used as the server seems to limit
                 requests for a certain given time"""
@@ -41,15 +40,25 @@ class Server:
                         new_socket, add = client.accept()       #accept new connection
                         new_client = Client(new_socket)         #create new client
                         self.client_connections.append(new_client)      #add client to connections
-                        # self.greet(new_client)
                         new_client.socket.sendall(b"Hello!\nWhat's your name?\n")     #get client name
 
                     else:
                         msg = client.socket.recv(4096)      #4096 == max amount of data to be received
-                        if msg:
-                        #pass message to be handled
-                            msg = msg.decode().lower()
-                            self.handle_msg(client, msg)
+                        if msg: #pass message to be handled
+                            msg = msg.decode().strip().lower()
+                            print(client.name + " says: " + msg)
+
+                            if msg in commands or "name:" in msg: #send command to be executed if it is a command
+                                self.execute_command(client,msg)
+                            
+                            else:   #else broadcast message
+                                if client.name in self.client_rooms:
+                                    self.rooms[self.client_rooms[client.name]].broadcast(client, msg.encode())
+                                else:   #notify client they must be in room to chat
+                                    msg = "You are currently not in any room! \n" \
+                                        + "Use !rooms to see available rooms \n" \
+                                        + "Or !join [room_name] to create/join a room\n"
+                                    client.socket.sendall(msg.encode())
                         else:
                         #remove client 
                             client.socket.close()
@@ -57,18 +66,14 @@ class Server:
             except:
                 pass
 
-    """ handle_msg uses message prefixes to decide how to handle messages,
-    executes commands, and passes message to appropriate Room object 
-    to be broadcasted"""
-    def handle_msg(self, client, msg):
-        print(client.name + " says: " + msg)
-        
-        #command executions
+    """ execute_command uses message prefixes to decide which 
+    command to execute"""
+    def execute_command(self, client, msg):
         if "name:" in msg:
             name = msg.split()[1]
             client.name = name
             print("{} has joined!\n".format(client.name))
-            client.socket.sendall(instructions.encode())         #show instructions
+            client.socket.sendall(instructions.encode())         #show instructions for new users
 
         elif "!join" in msg:
             self.join(client,msg)
@@ -83,21 +88,9 @@ class Server:
             client.socket.sendall(instructions.encode())
         
         elif "!leave" in msg:
-            # exit_msg = "{} has left :(\n".format(client.name)
             client.socket.sendall("!leave".encode())        #send to client file
             self.remove_client(client)
 
-        #else send to room to broadcast client's message
-        else:
-            #verify that client is in a room
-            if client.name in self.client_rooms:
-                self.rooms[self.client_rooms[client.name]].broadcast(client, msg.encode())
-            else:
-            #notify client they must be in room to chat
-                msg = "You are currently not in any room! \n" \
-                    + "Use !rooms to see available rooms \n" \
-                    + "Or !join [room_name] to create/join a room\n"
-                client.socket.sendall(msg.encode())
 
     """ show_rooms is a function executed when the client enters the command !rooms.
     It shows the client all available rooms"""
@@ -168,6 +161,7 @@ class Server:
         while True:
             IN = input()
             if IN == "!shutdown":
+                [client.socket.close() for client in self.client_connections]   #close client connections
                 print("\nServer has been shut down\n")
                 os._exit(1) #forces shutdown
 
