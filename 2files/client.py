@@ -1,7 +1,5 @@
 import select,socket,sys,argparse
 
-QUIT = "!quit\n"
-
 #every user is a socket
 class Client:
     def __init__(self, socket, name = "new"):
@@ -15,22 +13,27 @@ class Client:
 
 
 if __name__ == "__main__":
-    #read command line arguments
-    parser = argparse.ArgumentParser(description="Client Connection")
-    parser.add_argument("host", default="0.0.0.0",help="Interface the server listens at")
-    parser.add_argument("-p", metavar="PORT", type=int, default=8000,
-                        help="TCP port (default 8000)")
-    args = parser.parse_args()
+
+    """ take in ip address and port number here as the
+    server will handle client and chatroom name"""
+    ip_address = input("IP address: ")
+    port = int(input("Port no.: "))
 
     #create connection to server
+    """ socket creation is explained in server.py, however in this case we
+    do not need to use all thse same functions as it is not the listening socket.
+    Instead we use socket.connect to the socket at the given address"""
     server_connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_connection.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_connection.connect((args.host, args.p))   #ip address, port
+    server_connection.connect((ip_address,port))   #ip address, port
     socket_list = [sys.stdin, server_connection]
 
-    msg_start = ""
+    """ sends messages to client's interface and passes client's message
+    to server to be handled"""
+    prefix = ""
     while True:
-        read_sockets, write_sockets, error_sockets = select.select(socket_list, [], [])
+        #X and Y are not needed
+        read_sockets, X, Y = select.select(socket_list, [], [])
         for sock in read_sockets:
             if sock is server_connection: # incoming message 
                 msg = sock.recv(4096)       #if no message received
@@ -39,17 +42,18 @@ if __name__ == "__main__":
                     print("Server down!")
                     sys.exit(2)
                 else:
-                    if msg == QUIT.encode():
+                    if msg == "!leave".encode():
                         sys.stdout.write("See you again!\n")
-                        quit()      #quit only for the player
+                        quit()      #quit only for the client
                     else:
                         sys.stdout.write(msg.decode())
                         if "What's your name?" in msg.decode():
-                            msg_start = "name: " # identifier for name
+                            prefix = "name: " # identifier for name
                         else:
-                            msg_start = ""
+                            prefix = ""
                         print(">", end=" ", flush = True)   #move to next line
 
             else:
-                msg = msg_start + sys.stdin.readline()
-                server_connection.sendall(msg.encode())     #pass to server to pass to lobby
+                #pass msg to server to handle
+                msg = prefix + sys.stdin.readline()
+                server_connection.sendall(msg.encode())
